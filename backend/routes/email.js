@@ -6,6 +6,13 @@ import generateHtml from '../utils/emailTemplate.js';
 
 const router = express.Router();
 
+const ensureCriticalDbConfigured = (req, res, next) => {
+  if (!process.env.MONGODB_URI && !process.env.MONGO_URI2) {
+    return res.status(503).json({ error: 'Critical Alert DB is not configured (set MONGODB_URI or MONGO_URI2).' });
+  }
+  next();
+};
+
 // JWT authentication middleware
 const auth = (req, res, next) => {
   const token = req.header('Authorization')?.replace('Bearer ', '');
@@ -19,62 +26,54 @@ const auth = (req, res, next) => {
   }
 };
 
-// Fetch all machines (by IP)
-router.get('/groups', auth, async (req, res) => {
+// Fetch all group names
+router.get('/groups', ensureCriticalDbConfigured, auth, async (req, res) => {
   try {
-    const machines = await RecipientGroup.find().select('ip error_description machine_location');
-    res.json(machines);
+    const groups = await RecipientGroup.find().select('name');
+    res.json(groups.map(g => g.name));
   } catch (err) {
-    console.error('Fetch machines error:', err);
-    res.status(500).json({ error: 'Failed to fetch machines' });
+    console.error('Fetch groups error:', err);
+    res.status(500).json({ error: 'Failed to fetch groups' });
   }
 });
 
-// Fetch single machine details by IP
-router.get('/groups/:ip', auth, async (req, res) => {
+// Fetch single group details
+router.get('/groups/:groupName', ensureCriticalDbConfigured, auth, async (req, res) => {
   try {
-    const machine = await RecipientGroup.findOne({ ip: req.params.ip });
-    if (!machine) return res.status(404).json({ error: 'Machine not found' });
-    res.json({
-      ip: machine.ip,
-      error_description: machine.error_description,
-      machine_location: machine.machine_location
-    });
+    const group = await RecipientGroup.findOne({ name: req.params.groupName });
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+    res.json({ to: group.to, cc: group.cc });
   } catch (err) {
-    console.error('Fetch machine details error:', err);
-    res.status(500).json({ error: 'Failed to fetch machine details' });
+    console.error('Fetch group details error:', err);
+    res.status(500).json({ error: 'Failed to fetch group details' });
   }
 });
 
 // Send email
-router.post('/send', auth, async (req, res) => {
+router.post('/send', ensureCriticalDbConfigured, auth, async (req, res) => {
   try {
     const data = req.body;
     console.log('Received send request with data:', data);
 
     // Validate required fields
-    const requiredFields = ['ip', 'error_description', 'machine_location'];
-    for (const field of requiredFields) {
+    const requiredFields = ['recipient_group', 'trigger_name', 'host_name', 'host_ip'];
+    for (let field of requiredFields) {
       if (!data[field]) return res.status(400).json({ error: `${field} is required` });
     }
+
+    const group = await RecipientGroup.findOne({ name: data.recipient_group });
+    if (!group) return res.status(404).json({ error: 'Group not found' });
 
     // Check email configuration
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
       return res.status(500).json({ error: 'Email configuration not found' });
     }
 
-    // Use the data directly (no database lookup needed)
-    const emailData = {
-      machine_ip: data.ip,
-      error_description: data.error_description,
-      machine_location: data.machine_location
-    };
+    const html = generateHtml(data);
 
-    const html = generateHtml(emailData);
-
-    // Nodemailer transporter for Outlook / Office 365
+    // ✅ Correct Nodemailer transporter for Outlook / Office 365
     const transporter = nodemailer.createTransport({
-      host: 'smtp.office365.com',
+      host: "smtp.office365.com",
       port: 587,
       secure: false, // STARTTLS
       auth: {
@@ -83,12 +82,12 @@ router.post('/send', auth, async (req, res) => {
       }
     });
 
-    // Send email - using a default recipient since we don't have to/cc in new model
-    const defaultEmail = process.env.DEFAULT_EMAIL || process.env.EMAIL_USER;
+    // Send email
     await transporter.sendMail({
       from: `"NOC Team" <${process.env.EMAIL_USER}>`,
-      to: defaultEmail,
-      subject: `[ALERT] Machine Error - ${data.ip || 'Unknown IP'}`,
+      to: group.to.split(';').map(e => e.trim()).filter(Boolean),
+      cc: group.cc.split(';').map(e => e.trim()).filter(Boolean),
+      subject: data.trigger_name,
       html
     });
 

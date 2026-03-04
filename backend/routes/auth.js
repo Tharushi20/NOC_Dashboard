@@ -4,7 +4,14 @@ import User from '../models/User.js';
 
 const router = express.Router();
 
-router.post('/register', async (req, res) => {
+const ensureCriticalDbConfigured = (req, res, next) => {
+  if (!process.env.MONGODB_URI && !process.env.MONGO_URI2) {
+    return res.status(503).json({ error: 'Critical Alert DB is not configured (set MONGODB_URI or MONGO_URI2).' });
+  }
+  next();
+};
+
+router.post('/register', ensureCriticalDbConfigured, async (req, res) => {
   try {
     const { username, password } = req.body;
     if (!username || !password) {
@@ -22,7 +29,7 @@ router.post('/register', async (req, res) => {
   }
 });
 
-router.post('/login', async (req, res) => {
+router.post('/login', ensureCriticalDbConfigured, async (req, res) => {
   try {
     const { username, password } = req.body;
     if (!username || !password) {
