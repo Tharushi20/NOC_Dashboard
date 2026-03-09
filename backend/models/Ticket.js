@@ -18,6 +18,7 @@ const ticketSchema = new mongoose.Schema({
   resolvedDate: { type: Date },
   sla: { type: String },
   fitOperator: { type: String },
+  notes: { type: String }, // Additional notes field
   dateCreated: { type: Date, default: Date.now } // System-recorded created date
 });
 
